@@ -1,0 +1,27 @@
+[project]
+name = "tuna"
+version = "0.1.0"
+description = "Fine-tuning assistant"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bitsandbytes>=0.48.1",
+    "ninja>=1.13.0",
+    "optuna>=4.5.0",
+    "pydantic-settings>=2.11.0",
+    "transformers>=4.57.1",
+    "unsloth>=2025.10.10",
+    "unsloth-zoo>=2025.10.12",
+    "vllm>=0.11.0",
+    "torchao==0.13.0",
+    "loguru>=0.7.3",
+]
+
+[tool.uv.sources]
+xformers = { git = "https://github.com/facebookresearch/xformers.git", rev = "main" }
+
+[dependency-groups]
+dev = ["pre-commit>=4.3.0", "ty>=0.0.1a24", "ruff>=0.14.2"]
+
+[tool.ty]
+# Configuration options will be documented as ty matures
