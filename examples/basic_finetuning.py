@@ -1,6 +1,6 @@
-"""Example: Basic fine-tuning with Tuna."""
+"""Example: Basic fine-tuning with Atuna."""
 
-from tuna import (
+from atuna import (
     TunaConfig,
     Tuna,
     model_registry,

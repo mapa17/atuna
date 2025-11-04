@@ -1,6 +1,6 @@
-"""Example: Hyperparameter tuning with Tuna."""
+"""Example: Hyperparameter tuning with Atuna."""
 
-from tuna import (
+from atuna import (
     TunaConfig,
     Tuna,
     model_registry,

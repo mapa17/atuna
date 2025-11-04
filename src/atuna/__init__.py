@@ -1,4 +1,4 @@
-"""Tuna: Fine-tuning assistant for large language models."""
+"""Atuna: Fine-tuning assistant for large language models."""
 
 from .core import Tuna
 from .config import (

@@ -1,4 +1,4 @@
-"""Minimal CLI interface for Tuna."""
+"""Minimal CLI interface for Atuna."""
 
 import argparse
 import sys
@@ -8,21 +8,21 @@ from . import __version__
 
 
 def main() -> None:
-    """CLI entry point for Tuna."""
+    """CLI entry point for Atuna."""
     parser = argparse.ArgumentParser(
-        description="Tuna: Fine-tuning assistant for large language models",
+        description="Atuna: Fine-tuning assistant for large language models",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  tuna --version                    Show version information
-  tuna --list-models               List available models
+  atuna --version                   Show version information
+  atuna --list-models              List available models
 
-For advanced usage, use Tuna as a Python library:
-  from tuna import Tuna, TunaConfig, TrainingConfig, model_registry
+For advanced usage, use Atuna as a Python library:
+  from atuna import Tuna, TunaConfig, TrainingConfig, model_registry
         """,
     )
 
-    parser.add_argument("--version", action="version", version=f"Tuna {__version__}")
+    parser.add_argument("--version", action="version", version=f"Atuna {__version__}")
 
     parser.add_argument(
         "--list-models",
@@ -46,7 +46,7 @@ For advanced usage, use Tuna as a Python library:
     # If no arguments provided, show help
     if len(sys.argv) == 1:
         parser.print_help()
-        print("\nFor full functionality, use Tuna as a Python library.")
+        print("\nFor full functionality, use Atuna as a Python library.")
         print("See examples/ directory for usage examples.")
 
 

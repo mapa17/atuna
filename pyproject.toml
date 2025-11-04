@@ -1,12 +1,19 @@
 [project]
-name = "tuna"
+name = "atuna"
 version = "0.2.0"
 description = "A Fine-tuning assistant for large language models"
 readme = "README.md"
 requires-python = ">=3.12"
-authors = [{ name = "mapa17", email = "mapa17@users.noreply.github.com" }]
+authors = [{ name = "Pasieka Manuel", email = "contact@pasieka.ai" }]
 license = { text = "MIT" }
-keywords = ["machine-learning", "fine-tuning", "llm", "transformers", "optuna"]
+keywords = [
+    "machine-learning",
+    "fine-tuning",
+    "llm",
+    "transformers",
+    "unsloth",
+    "optuna",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -31,22 +38,22 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mapa17/tuna"
-Repository = "https://github.com/mapa17/tuna"
-Issues = "https://github.com/mapa17/tuna/issues"
+Homepage = "https://github.com/mapa17/atuna"
+Repository = "https://github.com/mapa17/atuna"
+Issues = "https://github.com/mapa17/atuna/issues"
 
 [project.scripts]
-tuna = "tuna.cli:main"
+atuna = "atuna.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-packages = ["src/tuna"]
+packages = ["src/atuna"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tuna"]
+packages = ["src/atuna"]
 
 # Include logo and documentation files in the package
 [tool.hatch.build.targets.wheel.shared-data]

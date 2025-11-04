@@ -1,12 +1,10 @@
 <div align="center">
   <img src="docs/logo.png" alt="Atuna Logo" width="200" />
 
-  # 🐟 Atuna
-
   **A tasty layer on top of Unsloth for Large Language Model fine-tuning**
 </div>
 
-A fine-tuning assistant for large language models with built-in hyperparameter optimization.
+Atuna: A fine-tuning assistant for large language models with built-in hyperparameter optimization.
 
 ## Features
 
@@ -20,8 +18,8 @@ A fine-tuning assistant for large language models with built-in hyperparameter o
 ### From source (development)
 
 ```bash
-git clone https://github.com/mapa17/tuna.git
-cd tuna
+git clone https://github.com/mapa17/atuna.git
+cd atuna
 uv sync
 uv pip install -e .
 ```
@@ -29,7 +27,7 @@ uv pip install -e .
 ### Using the library
 
 ```bash
-pip install tuna  # When published to PyPI
+pip install atuna  # When published to PyPI
 ```
 
 ## Quick Start
@@ -205,8 +203,8 @@ See the `examples/` directory for complete usage examples:
 
 ```bash
 # Clone repository
-git clone https://github.com/mapa17/tuna.git
-cd tuna
+git clone https://github.com/mapa17/atuna.git
+cd atuna
 
 # Install development dependencies
 uv sync --group dev
