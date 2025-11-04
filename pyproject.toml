@@ -1,9 +1,20 @@
 [project]
 name = "tuna"
-version = "0.1.0"
-description = "Fine-tuning assistant"
+version = "0.2.0"
+description = "A Fine-tuning assistant for large language models"
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [{ name = "mapa17", email = "mapa17@users.noreply.github.com" }]
+license = { text = "MIT" }
+keywords = ["machine-learning", "fine-tuning", "llm", "transformers", "optuna"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "bitsandbytes>=0.48.1",
     "ninja>=1.13.0",
@@ -19,11 +30,34 @@ dependencies = [
     "tensorboard>=2.20.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/mapa17/tuna"
+Repository = "https://github.com/mapa17/tuna"
+Issues = "https://github.com/mapa17/tuna/issues"
+
+[project.scripts]
+tuna = "tuna.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+packages = ["src/tuna"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tuna"]
+
+# Include logo and documentation files in the package
+[tool.hatch.build.targets.wheel.shared-data]
+"docs" = "docs"
+
 [tool.uv.sources]
 xformers = { git = "https://github.com/facebookresearch/xformers.git", rev = "main" }
 
 [dependency-groups]
-dev = ["pre-commit>=4.3.0", "ty>=0.0.1a24", "ruff>=0.14.2"]
+dev = ["pre-commit>=4.3.0", "ty>=0.0.1a24", "ruff>=0.14.2", "pytest>=7.0.0"]
+docs = ["mkdocs>=1.5.0", "mkdocs-material>=9.0.0"]
 
 [tool.ty]
 # Configuration options will be documented as ty matures
