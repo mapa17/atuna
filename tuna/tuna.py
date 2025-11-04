@@ -1,4 +1,4 @@
-from typing import Optional, Union, Any, cast
+from typing import Literal, Optional, Union, Any, cast
 from enum import Enum
 import time
 import os
@@ -15,7 +15,6 @@ from trl.trainer.sft_config import SFTConfig
 from transformers import (
     PreTrainedTokenizer,
     AutoModelForCausalLM,
-    TextStreamer,
     EarlyStoppingCallback,
 )
 
@@ -60,9 +59,9 @@ class TunaConfig(BaseSettings):
     model_cfg: ModelConfig
     dataset_path: str
     max_seq_length: int = 2048
-    load_in_4bit: bool = True
+    precision: Literal[4, 8, 16] = Field(default=16)
+    load_in_4bit: bool = False
     load_in_8bit: bool = False
-    # load_in_16bit: bool = False
     full_finetuning: bool = False
     peft_r: int = 32
     peft_target_modules: list[str] = [
@@ -79,9 +78,21 @@ class TunaConfig(BaseSettings):
     peft_bias: str = "none"
     peft_use_gradient_checkpointing: str = "unsloth"
     peft_random_state: int = 3407
-    peft_use_rslora: bool = False
+    use_rslora: bool = True
     cache_dir: Optional[str] = None
-    temp_dir: str = "./tuna_temp"
+    workspace: str = "./atuna_workspace"
+
+    def model_post_init(self, __context: Any) -> None:
+        match self.precision:
+            case 4:
+                self.load_in_4bit = True
+                self.load_in_8bit = False
+            case 8:
+                self.load_in_4bit = False
+                self.load_in_8bit = True
+            case 16:
+                self.load_in_4bit = False
+                self.load_in_8bit = False
 
 
 class TrainingConfig(BaseSettings):
@@ -92,8 +103,11 @@ class TrainingConfig(BaseSettings):
     response_only: bool = False
     seed: Optional[int] = None
     # eval_steps: Optional[int] = None
-    eval_epochs: Optional[int] = None
+    eval_epochs: Optional[float] = None
     enable_early_stopping: bool = True
+    evaluation_prompts: list[str] = Field(default_factory=list)
+    weight_decay: float = 0.01
+    data_sample: float = 1.0
 
     def SFTConfig(self, tuna_config: TunaConfig) -> SFTConfig:
         if self.seed:
@@ -110,7 +124,8 @@ class TrainingConfig(BaseSettings):
         else:
             eval_strategy = "no"
 
-        output_dir = tuna_config.temp_dir + "/output"
+        output_dir = tuna_config.workspace + "/checkpoints"
+        logging_dir = tuna_config.workspace + "/logging"
 
         if self.enable_early_stopping:
             save_strategy = "best"  # save model every N steps
@@ -133,12 +148,11 @@ class TrainingConfig(BaseSettings):
             gradient_accumulation_steps=self.gradient_accumulation_steps,
             num_train_epochs=self.num_train_epochs,
             learning_rate=self.learning_rate,
-            logging_steps=1,
-            optim="adamw_8bit",
-            weight_decay=0.01,
+            optim="adamw_8bit",  # Using bitsandbytes optimizer that stores optimizer states in 8bit precision, expanding them on the fly for gradient calculation.
+            weight_decay=self.weight_decay,
+            warmup_ratio=0.03,
             lr_scheduler_type="linear",
             seed=seed,
-            report_to="none",
             fp16_full_eval=True,
             per_device_eval_batch_size=self.batch_size,
             eval_accumulation_steps=self.gradient_accumulation_steps,
@@ -151,6 +165,9 @@ class TrainingConfig(BaseSettings):
             load_best_model_at_end=load_best_model_at_end,
             metric_for_best_model=metric_for_best_model,
             greater_is_better=greater_is_better,
+            report_to="tensorboard",  # Change from "none" to "tensorboard"
+            logging_dir=logging_dir,  # TensorBoard log directory
+            logging_steps=1,
         )
 
 
@@ -159,42 +176,84 @@ class HyperparpamConfig(BaseSettings):
     learning_rate: list[float] = Field(default_factory=list)
     peft_r: list[int] = Field(default_factory=list)
     lora_alpha: list[int] = Field(default_factory=list)
+    weight_decay: list[float] = Field(default_factory=list)
 
     learning_rate_min_max: Optional[tuple[float, float]] = None
     peft_r_min_max: Optional[tuple[int, int]] = None
     lora_alpha_min_max: Optional[tuple[int, int]] = None
+    weight_decay_min_max: Optional[tuple[float, float]] = None
 
-    def get_hpo_search_space(self, trial: optuna.Trial) -> dict[str, Any]:
-        if self.learning_rate_min_max:
-            lr = trial.suggest_float(
-                "learning_rate",
-                self.learning_rate_min_max[0],
-                self.learning_rate_min_max[1],
-            )
-        elif self.learning_rate:
-            lr = trial.suggest_categorical("learning_rate", self.learning_rate)
+    # If overwritten enable loading models in different precisions
+    precision: list[Literal[4, 8, 16]] = Field(default_factory=list)
 
-        if self.peft_r_min_max:
-            r = trial.suggest_int(
-                "peft_r", self.peft_r_min_max[0], self.peft_r_min_max[1]
-            )
-        elif self.peft_r:
-            r = trial.suggest_categorical("peft_r", self.peft_r)
+    enable_slora: bool = False
 
-        if self.lora_alpha_min_max:
-            alpha = trial.suggest_int(
-                "lora_alpha",
-                self.lora_alpha_min_max[0],
-                self.lora_alpha_min_max[1],
-            )
-        elif self.lora_alpha:
-            alpha = trial.suggest_categorical("lora_alpha", self.lora_alpha)
+    @staticmethod
+    def _minmax(
+        trial: optuna.Trial,
+        name: str,
+        choices: Union[list[float], list[int]],
+        min_max: Optional[Union[tuple[float, float], tuple[int, int]]],
+    ) -> Any:
+        """Helper to choose between an element in choices, or if min_max is set use the trial to suggest a value."""
+        if min_max:
+            if isinstance(min_max[0], float):
+                return trial.suggest_float(name, min_max[0], min_max[1])
+            elif isinstance(min_max[0], int) and isinstance(min_max[1], int):
+                return trial.suggest_int(name, min_max[0], min_max[1])
+        else:
+            return trial.suggest_categorical(name, choices)
 
-        return {
-            "learning_rate": lr,
-            "peft_r": r,
-            "lora_alpha": alpha,
-        }
+    @staticmethod
+    def _categorical(
+        trial: optuna.Trial,
+        name: str,
+        choices: list[Any],
+        default: Union[float, int],
+    ) -> Any:
+        if len(choices) > 0:
+            return trial.suggest_categorical(name, choices)
+        return default
+
+    def build_configs(
+        self, trial: optuna.Trial, training_cfg: TrainingConfig, tuna_cfg: TunaConfig
+    ) -> tuple[TunaConfig, TrainingConfig]:
+        lr = self._minmax(
+            trial, "learning_rate", self.learning_rate, self.learning_rate_min_max
+        )
+        r = self._minmax(trial, "peft_r", self.peft_r, self.peft_r_min_max)
+        alpha = self._minmax(
+            trial, "lora_alpha", self.lora_alpha, self.lora_alpha_min_max
+        )
+        wd = self._minmax(
+            trial, "weight_decay", self.weight_decay, self.weight_decay_min_max
+        )
+
+        precision = self._categorical(
+            trial, "precision", self.precision, tuna_cfg.precision
+        )
+
+        if self.enable_slora:
+            use_rslora = self._categorical(trial, "use_rslora", [True, False], False)
+        else:
+            use_rslora = False
+
+        training_cfg = training_cfg.model_copy(deep=True)
+        tuna_cfg = tuna_cfg.model_copy(deep=True)
+
+        training_cfg.learning_rate = lr
+        training_cfg.weight_decay = wd
+        tuna_cfg.peft_r = r
+        tuna_cfg.peft_lora_alpha = alpha
+        tuna_cfg.use_rslora = use_rslora
+        tuna_cfg.precision = precision
+        tuna_cfg.model_post_init(None)
+
+        logger.debug(
+            f"Build configs: tuna config: {tuna_cfg.model_dump()}, training config: {training_cfg.model_dump()}"
+        )
+
+        return tuna_cfg, training_cfg
 
 
 class TrainingPoint(BaseModel):
@@ -210,7 +269,8 @@ class TrainingEvaluationPoint(BaseModel):
 
 class StopReason(str, Enum):
     EARLY_STOPPING = "EARLY_STOPPING"
-    MAX_STEPS = "MAX_STEPS"
+    MAX_EPOCHS = "MAX_EPOCHS"
+    UNKNOWN = "UNKNOWN"
 
 
 class TrainingResult(BaseModel):
@@ -218,7 +278,13 @@ class TrainingResult(BaseModel):
     duration: float
     stop_reason: StopReason
     training: list[TrainingPoint] = []
-    evaluations: list[TrainingEvaluationPoint] = []
+    evaluations_loss: list[TrainingEvaluationPoint] = []
+    evaluation_prompts_pre_training: list[str] = Field(default_factory=list)
+    evaluation_prompts_post_training: list[str] = Field(default_factory=list)
+
+    def add_to_trial(self, trial: optuna.trial.Trial):
+        for k, v in self.model_dump().items():
+            trial.set_user_attr(key=k, value=v)
 
 
 class MemoryInfo(BaseModel):
@@ -232,49 +298,52 @@ class MemoryInfo(BaseModel):
 # Tuna is a fine-tuner friendly helper
 class Tuna:
     def __init__(self, config: TunaConfig):
-        self.config = config
+        self.config: TunaConfig = config
         self.data: Optional[DatasetDict] = None
         self.model: Union[AutoModelForCausalLM, GenerationMixin, None] = None
         self.tokenizer: Optional[PreTrainedTokenizer] = None
         self.trainer: Optional[SFTTrainer] = None
         self.hyper_trainer: Optional[SFTTrainer] = None
 
+    @staticmethod
     def _model_init(
-        self,
+        config: TunaConfig,
     ) -> tuple[Union[AutoModelForCausalLM, GenerationMixin], PreTrainedTokenizer]:
         model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=self.config.model_cfg.model_name,
-            max_seq_length=self.config.max_seq_length,
-            load_in_4bit=self.config.load_in_4bit,
-            load_in_8bit=self.config.load_in_8bit,
-            # load_in_16bit=self.config.load_in_16bit,
-            full_finetuning=self.config.full_finetuning,
-            cache_dir=self.config.cache_dir,
+            model_name=config.model_cfg.model_name,
+            max_seq_length=config.max_seq_length,
+            load_in_4bit=config.load_in_4bit,
+            load_in_8bit=config.load_in_8bit,
+            full_finetuning=config.full_finetuning,
+            cache_dir=config.cache_dir,
         )
 
         model = FastLanguageModel.get_peft_model(
             model,
-            r=self.config.peft_r,
-            target_modules=self.config.peft_target_modules,
-            lora_alpha=self.config.peft_lora_alpha,
-            lora_dropout=self.config.peft_lora_dropout,
-            bias=self.config.peft_bias,
-            use_gradient_checkpointing=self.config.peft_use_gradient_checkpointing,
-            random_state=self.config.peft_random_state,
-            use_rslora=self.config.peft_use_rslora,
+            r=config.peft_r,
+            target_modules=config.peft_target_modules,
+            lora_alpha=config.peft_lora_alpha,
+            lora_dropout=config.peft_lora_dropout,
+            bias=config.peft_bias,
+            use_gradient_checkpointing=config.peft_use_gradient_checkpointing,
+            random_state=config.peft_random_state,
+            use_rslora=config.use_rslora,
             loftq_config=None,
         )
 
         tokenizer = get_chat_template(
             tokenizer,
-            chat_template=self.config.model_cfg.chat_template,
+            chat_template=config.model_cfg.chat_template,
         )
         return model, tokenizer
 
     @staticmethod
-    def _load_data(path: str, tokenizer: PreTrainedTokenizer) -> DatasetDict:
+    def _load_data(
+        path: str, tokenizer: PreTrainedTokenizer, sample: float = 1.0
+    ) -> DatasetDict:
         data = pd.read_csv(path)
-        data = data.sample(frac=0.1, random_state=3407).reset_index(drop=True)
+        if sample < 1.0:
+            data = data.sample(frac=sample, random_state=3407).reset_index(drop=True)
         td = []
         for idx, record in data.iterrows():
             td.append(
@@ -343,7 +412,33 @@ class Tuna:
             )
         return cast(SFTTrainer, trainer)
 
-    def evaluate(self, prompts: list[str], max_tokens: int = 300) -> list[str]:
+    def evaluate_prompts(
+        self, prompts: list[str], max_tokens: int = 300, n_samples: int = 1
+    ) -> list[str]:
+        if self.model is None or self.tokenizer is None:
+            raise ValueError(
+                "Model and tokenizer must be initialized before evaluation."
+            )
+
+        return Tuna._evaluate_prompts(
+            prompts,
+            self.model,
+            self.tokenizer,
+            self.config,
+            max_tokens=max_tokens,
+            n_samples=n_samples,
+        )
+
+    @staticmethod
+    def _evaluate_prompts(
+        prompts: list[str],
+        model: Union[AutoModelForCausalLM, GenerationMixin],
+        tokenizer: PreTrainedTokenizer,
+        config: TunaConfig,
+        max_tokens: int = 300,
+        n_samples: int = 3,
+    ) -> list[str]:
+        results = []
         for prompt in prompts:
             messages = [
                 {
@@ -351,22 +446,37 @@ class Tuna:
                     "content": prompt,
                 }
             ]
-            text = self.tokenizer.apply_chat_template(
+            text = tokenizer.apply_chat_template(
                 conversation=messages,
                 tokenize=False,
                 add_generation_prompt=True,  # Must add for generation
             )
 
-            _ = self.model.generate(  # type: ignore[arg-type]
-                **self.tokenizer(text, return_tensors="pt").to("cuda"),  # type: ignore[arg-type]
-                max_new_tokens=max_tokens,
-                temperature=self.config.model_cfg.temperature,
-                top_p=self.config.model_cfg.top_p,
-                top_k=self.config.model_cfg.top_k,  # For non thinking
-                streamer=TextStreamer(self.tokenizer, skip_prompt=False),  # type: ignore[arg-type]
+            inputs: dict[str, torch.Tensor] = tokenizer(text, return_tensors="pt").to(
+                "cuda"
             )
 
-        return []
+            for _ in range(n_samples):
+                generated_tokens = model.generate(  # type: ignore[attr-defined]
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    max_new_tokens=max_tokens,
+                    temperature=config.model_cfg.temperature,
+                    top_p=config.model_cfg.top_p,
+                    top_k=config.model_cfg.top_k,
+                    do_sample=True,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+
+                # Generated tokens contains input message + new tokens, we only want new tokens
+                input_length = inputs["input_ids"].shape[1]
+                new_tokens = generated_tokens[0][input_length:]
+
+                # 5. Decode tokens back to text
+                generated_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
+                results.append(generated_text)
+
+        return results
 
     @staticmethod
     def get_mem_info() -> MemoryInfo:
@@ -383,14 +493,16 @@ class Tuna:
     def train(self, config: TrainingConfig) -> TrainingResult:
         # Allow for partial model/tokenizer reuse
         if self.model is None or self.tokenizer is None:
-            new_model, new_tokenizer = self._model_init()
+            new_model, new_tokenizer = self._model_init(self.config)
             self.model = new_model if self.model is None else self.model
             self.tokenizer = new_tokenizer if self.tokenizer is None else self.tokenizer
         if self.data is None:
-            self.data = self._load_data(self.config.dataset_path, self.tokenizer)
+            self.data = self._load_data(
+                self.config.dataset_path, self.tokenizer, sample=config.data_sample
+            )
 
         result = self._train(
-            mode=self.model,
+            model=self.model,
             tokenizer=self.tokenizer,
             data=self.data,
             training_config=config,
@@ -400,40 +512,70 @@ class Tuna:
 
         return result
 
-    def hyper_train(
+    def _hyper_train(
         self,
         training_config: TrainingConfig,
         hyper_config: HyperparpamConfig,
         trial: optuna.trial.Trial,
     ) -> float:
         # Modify tuna_config to ensure each study trial is stored in a different folder
-        self.config.temp_dir = (
-            f"{self.original_temp_dir}/studies/{trial.study.study_name}/{trial.number}"
+        self.config.workspace = (
+            f"{self.original_workspace}/studies/{trial.study.study_name}/{trial.number}"
         )
 
         logger.debug(
-            f"Starting trial {trial.number} of study {trial.study}, stored in {self.config.temp_dir}"
+            f"Starting trial {trial.number} of study {trial.study}, stored in {self.config.workspace}"
         )
         # Let Optuna suggest the hyperparameters
-        params = hyper_config.get_hpo_search_space(trial)
         # Create a TrainingConfig with the suggested hyperparameters
-        config = training_config.model_copy(deep=True, update=params)
-        logger.debug(f"Training config: {config.model_dump()}")
+        tuna_cfg, training_cfg = hyper_config.build_configs(
+            trial=trial, tuna_cfg=self.config, training_cfg=training_config
+        )
+        model, tokenizer = self._model_init(tuna_cfg)
+        if self.data is None:
+            self.data = self._load_data(
+                tuna_cfg.dataset_path, tokenizer, sample=training_cfg.data_sample
+            )
 
-        # Train the model with the current hyperparameters
-        self.model = None  # Reset model
-        self.tokenizer = None
-        # Keep tokenizer the same to avoid processing training data again
-        result = self.train(config)
-        trial.set_user_attr("result", result)
+        result = self._train(
+            model=model,
+            tokenizer=tokenizer,
+            data=self.data,
+            training_config=training_cfg,
+            tuna_config=tuna_cfg,
+        )
+        self.training_result = result
+
+        # Add training results to optuna trial
+        result.add_to_trial(trial)
 
         # Return the evaluation loss for optuna optimization
-        eval_losses = [eval_point.eval_loss for eval_point in result.evaluations]
+        eval_losses = [eval_point.eval_loss for eval_point in result.evaluations_loss]
         return min(eval_losses) if eval_losses else float("inf")
 
     @staticmethod
+    def _determine_stop_reason(trainer: SFTTrainer) -> StopReason:
+        """Determine why training stopped by examining trainer state."""
+
+        # Look for early stopping callback in trainer
+        for callback in trainer.callback_handler.callbacks:
+            if isinstance(callback, EarlyStoppingCallback):
+                if hasattr(callback, "early_stopping_patience_counter"):
+                    if (
+                        callback.early_stopping_patience_counter
+                        >= callback.early_stopping_patience
+                    ):
+                        return StopReason.EARLY_STOPPING
+
+        # Check if we reached max epochs
+        if trainer.state.epoch and trainer.state.epoch >= trainer.args.num_train_epochs:
+            return StopReason.MAX_EPOCHS
+
+        return StopReason.UNKNOWN
+
+    @staticmethod
     def _train(
-        mode: AutoModelForCausalLM | GenerationMixin,
+        model: AutoModelForCausalLM | GenerationMixin,
         tokenizer: PreTrainedTokenizer,
         data: DatasetDict,
         training_config: TrainingConfig,
@@ -443,35 +585,90 @@ class Tuna:
         # start_mem = Tuna.get_mem_info()
 
         trainer = Tuna._get_trainer(
-            model=mode,
+            model=model,
             tokenizer=tokenizer,
             data=data,
             train_config=training_config,
             tuna_config=tuna_config,
         )
+
+        evaluation_prompts_pre_training = []
+        evaluation_prompts_post_training = []
+
+        if training_config.evaluation_prompts:
+            evaluation_prompts_pre_training = Tuna._evaluate_prompts(
+                prompts=training_config.evaluation_prompts,
+                model=model,
+                tokenizer=tokenizer,
+                config=tuna_config,
+            )
+
         trainer.train()
+
+        if training_config.evaluation_prompts:
+            evaluation_prompts_post_training = Tuna._evaluate_prompts(
+                prompts=training_config.evaluation_prompts,
+                model=model,
+                tokenizer=tokenizer,
+                config=tuna_config,
+            )
 
         train_points, eval_points = Tuna._log_history_to_points(trainer)
 
-        if train_points[-1].epoch >= training_config.num_train_epochs:
-            stop_reason = StopReason.MAX_STEPS
-        else:
-            stop_reason = StopReason.EARLY_STOPPING
+        stop_reason = Tuna._determine_stop_reason(trainer)
 
         # end_mem = Tuna.get_mem_info()
         end_time = time.time()
 
         return TrainingResult(
-            epochs=float(trainer.state.epoch),
+            epochs=float(trainer.state.epoch) if trainer.state.epoch else 0.0,
             duration=end_time - start_time,
             stop_reason=stop_reason,
             training=train_points,
-            evaluations=eval_points,
+            evaluations_loss=eval_points,
+            evaluation_prompts_pre_training=evaluation_prompts_pre_training,
+            evaluation_prompts_post_training=evaluation_prompts_post_training,
         )
 
     @staticmethod
     def compute_objective(metric: dict[str, float]) -> float:
         return metric["eval_loss"]
+
+    def _setup_hyperparam_tune(self, study_name: str) -> optuna.study.Study:
+        # Ensure that the study_name is a valid folder name
+        try:
+            try:
+                os.removedirs(f"{self.config.workspace}/studies/{study_name}")
+            except Exception:
+                logger.debug("Study folder does not exist yet, no need to remove.")
+            os.makedirs(
+                f"{self.config.workspace}/studies/{study_name}",
+                exist_ok=True,
+            )
+        except Exception:
+            study_name = "default_study"
+            logger.warning(
+                f"Study name '{study_name}' is not a valid folder name. Using default name 'default_study' instead."
+            )
+        # Store original temp dir because we overwrite it for each trial
+        self.original_workspace = os.path.abspath(self.config.workspace)
+
+        # Store optuna in a sqlite database in the temp dir
+        storage_name = f"sqlite:///{self.original_workspace}/optuna_studies.db"
+        study = optuna.create_study(
+            study_name=study_name,
+            direction="minimize",
+            storage=storage_name,
+            load_if_exists=True,
+        )
+
+        logger.info(
+            f"Optuna study '{study_name}' created with storage '{storage_name}'.\n"
+            f"Open dashboard with: > optuna-dashboard sqlite:///{self.original_workspace}/optuna_studies.db\n"
+            f"Track individual trainings with tensorboard: > tensorboard --logdir {self.original_workspace}/logs\n"
+        )
+
+        return study
 
     def hyperparam_tune(
         self,
@@ -479,32 +676,21 @@ class Tuna:
         train_config: TrainingConfig,
         hyper_config: HyperparpamConfig,
     ) -> optuna.study.Study:
-        # Ensure that the study_name is a valid folder name
-        try:
-            os.makedirs(
-                f"{self.config.temp_dir}/studies/{study_name}",
-                exist_ok=True,
-            )
-        except Exception:
-            logger.warning(
-                f"Study name '{study_name}' is not a valid folder name. Using default name 'default_study' instead."
-            )
-            study_name = "default_study"
-        # Store original temp dir because we overwrite it for each trial
-        self.original_temp_dir = self.config.temp_dir
-        study = optuna.create_study(study_name=study_name, direction="minimize")
-
         logger.info(
             f"Starting hyperparameter tuning for study {study_name} with {hyper_config.n_trials} trials."
         )
+        study = self._setup_hyperparam_tune(study_name=study_name)
+
         study.optimize(
-            func=lambda trial: self.hyper_train(
+            func=lambda trial: self._hyper_train(
                 training_config=train_config, hyper_config=hyper_config, trial=trial
             ),
             n_trials=hyper_config.n_trials,
         )
 
-        best_trial_path = f"{self.original_temp_dir}/hyperparameter_study/{study_name}/{study.best_trial.number}"
+        best_trial_path = (
+            f"{self.original_workspace}/studies/{study_name}/{study.best_trial.number}"
+        )
         logger.info(
             f"Best trial: {study.best_trial.number} with value: {study.best_trial.value}. Model stored in {best_trial_path}"
         )

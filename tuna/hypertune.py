@@ -12,7 +12,7 @@ exp_config = TunaConfig(
     model_cfg=model,
     dataset_path="./data/251015_training_set.csv",
     max_seq_length=2048,
-    load_in_4bit=True,
+    precision=4,
     cache_dir="./hf_cache",
 )
 
@@ -31,25 +31,37 @@ exp_config = TunaConfig(
 
 hyper_exp = Tuna(config=exp_config)
 
+eval_prompts = [
+    "Was kannst du mir über den Stephans Dom in Wien erzählen?",
+    "Was kannst du mir über den Stephans Dom in Wien, auf wienerisch erzählen?",
+]
+
 run_config = TrainingConfig(
     num_train_epochs=2,
-    eval_epochs=1,
+    eval_epochs=0.25,
     batch_size=1,
     learning_rate=5e-5,
     gradient_accumulation_steps=16,
+    evaluation_prompts=eval_prompts,
+    data_sample=0.3,
 )
 
 hyper_config = HyperparpamConfig(
-    n_trials=3,
+    n_trials=10,
     learning_rate=[1e-5, 5e-5, 7e-5, 1e-4],
+    weight_decay=[0.001, 0.01, 0.1],
     peft_r=[16, 32],
-    lora_alpha=[16, 32],
+    lora_alpha=[32, 50, 64],
+    enable_slora=True,
 )
 study = hyper_exp.hyperparam_tune(
-    study_name="MyFineTuneTest",
+    study_name="MyFineTuneTest-2",
     train_config=run_config,
     hyper_config=hyper_config,
 )
+
+# Check training results with tensorboard
+# tensorboard --logdir ./tuna_temp/logs
 
 
 # hyper_exp.evaluate(
