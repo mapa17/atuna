@@ -17,7 +17,7 @@ from .models import (
 from .registry import model_registry
 
 __version__ = "0.2.0"
-__author__ = "Pasieka Manuel, contact@pasieka.ai"
+__author__ = "Pasieka Manuel, manuel.pasieka@protonmail.ch"
 
 __all__ = [
     "Tuna",

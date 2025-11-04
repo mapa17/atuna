@@ -135,6 +135,8 @@ class Tuna:
         tuna_config: TunaConfig,
     ) -> SFTTrainer:
         """Create and configure SFT trainer."""
+        n_samples = len(data["train"])
+        train_config.calculate_eval_steps(n_samples)
         trainer = SFTTrainer(
             model=cast(torch.nn.Module, model),
             tokenizer=tokenizer,  # type: ignore[arg-type]
@@ -242,6 +244,7 @@ class Tuna:
             new_model, new_tokenizer = self._model_init(self.config)
             self.model = new_model if self.model is None else self.model
             self.tokenizer = new_tokenizer if self.tokenizer is None else self.tokenizer
+
         if self.data is None:
             self.data = self._load_data(
                 self.config.dataset_path, self.tokenizer, sample=config.data_sample

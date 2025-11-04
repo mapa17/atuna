@@ -73,10 +73,27 @@ class TrainingConfig(BaseSettings):
     response_only: bool = False
     seed: Optional[int] = None
     eval_epochs: Optional[float] = None
+    eval_steps: Optional[int] = None
     enable_early_stopping: bool = True
     evaluation_prompts: list[str] = Field(default_factory=list)
     weight_decay: float = 0.01
     data_sample: float = 1.0
+
+    def calculate_eval_steps(self, training_data_size: int) -> None:
+        """Set eval_steps based on eval_epochs and training data size."""
+        steps_per_epoch = training_data_size // (
+            self.batch_size * self.gradient_accumulation_steps
+        )
+
+        if self.eval_epochs:
+            self.eval_steps = int(steps_per_epoch * self.eval_epochs)
+        elif self.eval_steps:
+            logger.debug(f"Using provided eval_steps: {self.eval_steps}")
+        else:
+            self.eval_steps = steps_per_epoch // 4
+        logger.debug(
+            f"Set eval_steps to {self.eval_steps} based on eval_epochs {self.eval_epochs} and training data size {training_data_size}"
+        )
 
     def SFTConfig(self, tuna_config: TunaConfig) -> SFTConfig:
         """Convert to SFTConfig for the trainer."""
@@ -85,11 +102,12 @@ class TrainingConfig(BaseSettings):
         else:
             seed = 3407
 
-        eval_steps = self.eval_epochs if self.eval_epochs else 0
-        if self.eval_epochs:
-            eval_strategy = "epoch"
+        if self.eval_steps:
+            eval_strategy = "steps"
+            eval_steps = self.eval_steps
         else:
             eval_strategy = "no"
+            eval_steps = 0
 
         output_dir = tuna_config.workspace + "/checkpoints"
         logging_dir = tuna_config.workspace + "/logging"
