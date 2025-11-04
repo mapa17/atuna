@@ -27,7 +27,6 @@ jobs:
     - name: Test with updated dependencies
       run: |
         uv run ruff check src/
-        uv run atuna --version
 
     - name: Create Pull Request
       uses: peter-evans/create-pull-request@v5

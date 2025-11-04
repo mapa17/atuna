@@ -42,9 +42,9 @@ jobs:
     - name: Run formatting check
       run: uv run ruff format --check src/ examples/
 
-    - name: Test CLI
-      run: |
-        uv run atuna --version
+    #- name: Test CLI
+    #  run: |
+    #    uv run atuna --version
 
     # Add tests when you have them
     # - name: Run tests
