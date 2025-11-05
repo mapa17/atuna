@@ -81,20 +81,5 @@ docs = [
 ]
 all = ["tensorboard>=2.20.0", "optuna-dashboard>=0.19.0"]
 
-# UV tool configuration
-[tool.uv]
-dev-dependencies = [
-    "pre-commit>=4.3.0",
-    "ty>=0.0.1a24",
-    "ruff>=0.14.2",
-    "pytest>=7.0.0",
-    "pytest-cov>=4.1.0",
-    "twine>=4.0.0",
-]
-
-# UV workspace configuration for multi-package projects (future use)
-# [tool.uv.workspace]
-# members = [".", "plugins/*"]
-
 [tool.ty]
 # Configuration options will be documented as ty matures
