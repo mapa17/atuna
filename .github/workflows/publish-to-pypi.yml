@@ -1,4 +1,4 @@
-name: Build and Publish Atuna
+name: Build and Publish to PyPI
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
     branches: [ master, main ]
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   test:
