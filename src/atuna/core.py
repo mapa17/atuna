@@ -296,17 +296,9 @@ class Tuna:
         )
         self.training_result = result
 
-        # Store only essential metrics instead of the whole TrainingResult object
-        trial.set_user_attr("epochs", result.epochs)
-        trial.set_user_attr("duration", result.duration)
-        trial.set_user_attr("stop_reason", result.stop_reason.value)
-        trial.set_user_attr(
-            "final_train_loss", result.training[-1].loss if result.training else None
-        )
-        trial.set_user_attr(
-            "final_eval_loss",
-            result.evaluations_loss[-1].eval_loss if result.evaluations_loss else None,
-        )
+        # Add full training result to trial attributes
+        result.add_to_trial(trial)
+
         trial.set_user_attr(
             "min_eval_loss",
             min([ep.eval_loss for ep in result.evaluations_loss])
