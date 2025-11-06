@@ -129,7 +129,7 @@ class Tuna:
         def apply_template(example: dict[str, list[Any]]):
             if self.config.dataset_text_field not in example:
                 raise ValueError(
-                    f"Dataset does not contain field '{self.config.dataset_text_field}'. Available fields are: {list(example.keys())}   "
+                    f"Dataset does not contain field '{self.config.dataset_text_field}'. Available fields are: {list(example.keys())}"
                 )
             conv = example[self.config.dataset_text_field]
             texts = [
