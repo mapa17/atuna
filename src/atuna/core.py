@@ -3,12 +3,19 @@
 from typing import Union, Optional, Any, cast
 import time
 import os
+import subprocess  # nosec
+import pathlib
 
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template, train_on_responses_only
-import pandas as pd
 import torch
-from datasets import Dataset, DatasetDict
+from datasets import (
+    Dataset,
+    DatasetDict,
+    IterableDataset,
+    IterableDatasetDict,
+    load_dataset,
+)
 from trl.trainer.sft_trainer import SFTTrainer
 from transformers import (
     PreTrainedTokenizer,
@@ -41,7 +48,37 @@ class Tuna:
         self.trainer: Optional[SFTTrainer] = None
         self.hyper_trainer: Optional[SFTTrainer] = None
         self.training_result: Optional[TrainingResult] = None
-        self.original_workspace: Optional[str] = None
+        self.original_workspace = (
+            pathlib.Path(self.config.workspace).absolute().as_posix()
+        )
+        self._optuna_process: Optional[subprocess.Popen] = None
+        self._tensorboard_process: Optional[subprocess.Popen] = None
+
+    def __del__(self):
+        """Called when the object is about to be destroyed."""
+        self.stop_dashboards()
+
+    def stop_dashboards(self):
+        """Clean up dashboard processes."""
+        if self._optuna_process:
+            try:
+                self._optuna_process.terminate()
+                self._optuna_process.wait(timeout=5)  # Wait up to 5 seconds
+                logger.info("Optuna Dashboard stopped")
+            except Exception as e:
+                logger.warning(f"Failed to stop Optuna Dashboard: {e}")
+            finally:
+                self._optuna_process = None
+
+        if self._tensorboard_process:
+            try:
+                self._tensorboard_process.terminate()
+                self._tensorboard_process.wait(timeout=5)
+                logger.info("TensorBoard stopped")
+            except Exception as e:
+                logger.warning(f"Failed to stop TensorBoard: {e}")
+            finally:
+                self._tensorboard_process = None
 
     @staticmethod
     def _model_init(
@@ -65,7 +102,7 @@ class Tuna:
             lora_dropout=config.peft_lora_dropout,
             bias=config.peft_bias,
             use_gradient_checkpointing=config.peft_use_gradient_checkpointing,
-            random_state=config.peft_random_state,
+            random_state=config.seed,
             use_rslora=config.use_rslora,
             loftq_config=None,
         )
@@ -76,28 +113,27 @@ class Tuna:
         )
         return model, tokenizer
 
-    @staticmethod
+    def model_init(self):
+        """Initialize model and tokenizer for Tuna instance."""
+        model, tokenizer = self._model_init(self.config)
+        self.model = model
+        self.tokenizer = tokenizer
+
     def _load_data(
-        path: str, tokenizer: PreTrainedTokenizer, sample: float = 1.0
+        self,
     ) -> DatasetDict:
         """Load and preprocess training data."""
-        data = pd.read_csv(path)
-        if sample < 1.0:
-            data = data.sample(frac=sample, random_state=3407).reset_index(drop=True)
-        td = []
-        for idx, record in data.iterrows():
-            td.append(
-                [
-                    {"role": "user", "content": record["request"]},
-                    {"role": "assistant", "content": record["response"]},
-                ]
-            )
-        ds = Dataset.from_dict({"text": td})
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer must be initialized before loading data.")
 
         def apply_template(example: dict[str, list[Any]]):
-            conv = example["text"]
+            if self.config.dataset_text_field not in example:
+                raise ValueError(
+                    f"Dataset does not contain field '{self.config.dataset_text_field}'. Available fields are: {list(example.keys())}   "
+                )
+            conv = example[self.config.dataset_text_field]
             texts = [
-                tokenizer.apply_chat_template(
+                self.tokenizer.apply_chat_template(  # noqa: TYP001
                     e, tokenize=False, add_generation_prompt=False
                 )
                 for e in conv
@@ -106,11 +142,63 @@ class Tuna:
                 "text": texts,
             }
 
-        ds_ready = ds.map(apply_template, batched=True)
+        # Load dataset from file or dataset hub
+        if os.path.exists(self.config.dataset):
+            _, ext = os.path.splitext(self.config.dataset)
+            ext = ext[1:]
+            logger.debug(
+                f"Loading dataset from file: {self.config.dataset} with extension: {ext}"
+            )
+            data = load_dataset(ext, data_files=self.config.dataset, revision="main")  # nosec B615
+        else:
+            logger.debug(f"Loading dataset from hub: {self.config.dataset}")
+            data = load_dataset(self.config.dataset, revision="main")  # nosec B615
 
-        split_dataset = ds_ready.train_test_split(
-            test_size=0.01, shuffle=True, seed=3407
-        )
+        # Apply tokenizer specific chat template and split into test and train
+        match data:
+            case DatasetDict():
+                if len(data.keys()) == 0:
+                    raise ValueError("Loaded dataset is empty.")
+                if "train" in data and "test" in data:
+                    logger.info("Using existing train/test split from dataset.")
+                    data["train"] = data["train"].map(apply_template, batched=True)
+                    data["test"] = data["test"].map(apply_template, batched=True)
+                    split_dataset = data
+                else:
+                    key = list(data.keys())[0]
+                    logger.info(
+                        f"Loading {key=} from dataset and creating train/test split."
+                    )
+                    data_templated = data[key].map(apply_template, batched=True)
+                    split_dataset = data_templated.train_test_split(
+                        test_size=self.config.dataset_test_size,
+                        shuffle=True,
+                        seed=self.config.seed,
+                    )
+
+            case Dataset():
+                logger.info("Loading dataset and creating train/test split.")
+                data_templated = data.map(apply_template, batched=True)
+                split_dataset = data_templated.train_test_split(
+                    test_size=self.config.dataset_test_size,
+                    shuffle=True,
+                    seed=self.config.seed,
+                )
+            case IterableDataset():
+                raise NotImplementedError("IterableDataset not supported yet.")
+            case IterableDatasetDict():
+                raise NotImplementedError("IterableDatasetDict not supported yet.")
+
+        # Sample a subset of training and test if required
+        if self.config.dataset_sample < 1.0:
+            for key in ["train", "test"]:
+                n_samples = int(len(split_dataset[key]) * self.config.dataset_sample)
+                split_dataset[key] = (
+                    split_dataset[key]
+                    .shuffle(seed=self.config.seed)
+                    .select(range(n_samples))
+                )
+                logger.info(f"Sampled {n_samples} items from {key} data.")
 
         return split_dataset
 
@@ -246,9 +334,7 @@ class Tuna:
             self.tokenizer = new_tokenizer if self.tokenizer is None else self.tokenizer
 
         if self.data is None:
-            self.data = self._load_data(
-                self.config.dataset_path, self.tokenizer, sample=config.data_sample
-            )
+            self.data = self._load_data()
 
         result = self._train(
             model=self.model,
@@ -283,9 +369,7 @@ class Tuna:
         )
         model, tokenizer = self._model_init(tuna_cfg)
         if self.data is None:
-            self.data = self._load_data(
-                tuna_cfg.dataset_path, tokenizer, sample=training_cfg.data_sample
-            )
+            self.data = self._load_data()
 
         result = self._train(
             model=model,
@@ -408,8 +492,6 @@ class Tuna:
             logger.warning(
                 f"Study name '{study_name}' is not a valid folder name. Using default name 'default_study' instead."
             )
-        # Store original temp dir because we overwrite it for each trial
-        self.original_workspace = os.path.abspath(self.config.workspace)
 
         # Store optuna in a sqlite database in the temp dir
         storage_name = f"sqlite:///{self.original_workspace}/optuna_studies.db"
@@ -479,3 +561,68 @@ class Tuna:
                 eval_points.append(ep)
 
         return train_points, eval_points
+
+    def start_optuna_dashboard(
+        self,
+    ):
+        """Start Optuna Dashboard with authentication."""
+        storage_url = f"sqlite:///{self.original_workspace}/optuna_studies.db"
+
+        try:
+            cmd = [
+                "optuna-dashboard",
+                storage_url,
+                "--port",
+                str(self.config.dashboard_optuna_port),
+                "--host",
+                self.config.dashboard_host,
+            ]
+
+            self._optuna_process = subprocess.Popen(cmd)  # nosec B603
+
+            url = f"http://{self.config.dashboard_host}:{self.config.dashboard_optuna_port}"
+            logger.info(f"Optuna Dashboard started at: {url}")
+            logger.debug(f"Optuna Dashboard PID: {self._optuna_process.pid}")
+        except FileNotFoundError:
+            logger.error(
+                "optuna-dashboard command not found. Install with: pip install optuna-dashboard"
+            )
+        except Exception as e:
+            logger.error(f"Failed to start Optuna Dashboard: {e}")
+
+    def start_tensorboard(self):
+        """Start TensorBoard using subprocess for better process control."""
+        logdir = f"{self.original_workspace}/logs"
+        os.makedirs(logdir, exist_ok=True)
+
+        try:
+            cmd = [
+                "tensorboard",
+                "--logdir",
+                logdir,
+                "--port",
+                str(self.config.dashboard_tb_port),
+                "--host",
+                self.config.dashboard_host,
+                "--reload_interval",
+                "30",
+            ]
+
+            self._tensorboard_process = subprocess.Popen(cmd)  # nosec B603
+
+            url = f"http://{self.config.dashboard_host}:{self.config.dashboard_tb_port}"
+            logger.info(f"TensorBoard started at: {url}")
+            logger.debug(f"TensorBoard PID: {self._tensorboard_process.pid}")
+        except FileNotFoundError:
+            logger.error(
+                "tensorboard command not found. Install with: pip install tensorboard"
+            )
+        except Exception as e:
+            logger.error(f"Failed to start TensorBoard: {e}")
+
+    def start_dashboards(
+        self,
+    ):
+        """Start both TensorBoard and Optuna dashboards."""
+        self.start_tensorboard()
+        self.start_optuna_dashboard()

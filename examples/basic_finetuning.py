@@ -11,7 +11,7 @@ from atuna import (
 model = model_registry["unsloth/Qwen3-4B-Instruct-2507"]
 config = TunaConfig(
     model_cfg=model,
-    dataset_path="./data/251015_training_set.csv",
+    dataset="./data/251015_training_set.csv",
     max_seq_length=2048,
     precision=16,  # Use 16-bit precision for faster training
     cache_dir="./hf_cache",

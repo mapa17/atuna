@@ -13,7 +13,9 @@ from atuna import (
 model = model_registry["unsloth/Qwen3-4B-Instruct-2507"]
 exp_config = TunaConfig(
     model_cfg=model,
-    dataset_path="./data/251015_training_set.csv",
+    dataset="251105_hawara_training.parquet",
+    dataset_sample=0.3,
+    # dataset="fka/awesome-chatgpt-prompts",
     max_seq_length=2048,
     precision=4,
     cache_dir="./hf_cache",
@@ -24,8 +26,8 @@ hyper_exp = Tuna(config=exp_config)
 
 # Define evaluation prompts to track during training
 eval_prompts = [
-    "Was kannst du mir über den Stephans Dom in Wien erzählen?",
-    "Was kannst du mir über den Stephans Dom in Wien, auf wienerisch erzählen?",
+    "Was kannst du mir über den Stephansdom in Wien erzählen?",
+    "Was kannst du mir über den Stephansdom in Wien, auf wienerisch erzählen?",
 ]
 
 # Configure training parameters
@@ -49,9 +51,14 @@ hyper_config = HyperparpamConfig(
     enable_slora=True,
 )
 
+# Start dashboards
+# Optuna: http://127.0.0.1:8080
+# TensorBoard: http://127.0.0.1:6006
+hyper_exp.start_dashboards()
+
 # Run hyperparameter optimization
 study = hyper_exp.hyperparam_tune(
-    study_name="MyFineTuneTest-2",
+    study_name="MyFineTuneTest-3",
     train_config=run_config,
     hyper_config=hyper_config,
 )
@@ -60,14 +67,4 @@ print(f"Best trial: {study.best_trial.number}")
 print(f"Best value: {study.best_trial.value}")
 print(f"Best parameters: {study.best_trial.params}")
 
-# View results:
-# - Optuna dashboard: optuna-dashboard sqlite:///./atuna_workspace/optuna_studies.db
-# - TensorBoard: tensorboard --logdir ./atuna_workspace/logs
-
-# Example: Evaluate the trained model
-# hyper_exp.evaluate_prompts(
-#     prompts=[
-#         "Was kannst du mir über den Stephans Dom in Wien erzählen?",
-#         "Was kannst du mir über den Stephans Dom in Wien, auf wienerisch erzählen?",
-#     ]
-# )
+hyper_exp.stop_dashboards()
