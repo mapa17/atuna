@@ -24,7 +24,10 @@ class TunaConfig(BaseSettings):
     """Main configuration for Tuna fine-tuning."""
 
     model_cfg: ModelConfig
-    dataset_path: str
+    dataset: str
+    dataset_sample: float = 1.0
+    dataset_text_field: str = "text"
+    dataset_test_size: float = 0.01
     max_seq_length: int = 2048
     precision: Literal[4, 8, 16] = Field(default=16)
     load_in_4bit: bool = False
@@ -44,10 +47,13 @@ class TunaConfig(BaseSettings):
     peft_lora_dropout: float = 0.0
     peft_bias: str = "none"
     peft_use_gradient_checkpointing: str = "unsloth"
-    peft_random_state: int = 3407
+    seed: int = 3407
     use_rslora: bool = True
     cache_dir: Optional[str] = None
     workspace: str = "./atuna_workspace"
+    dashboard_host: str = "127.0.0.1"
+    dashboard_tb_port: int = 6006
+    dashboard_optuna_port: int = 8080
 
     def model_post_init(self, __context: Any) -> None:
         """Set quantization flags based on precision."""
@@ -115,7 +121,7 @@ class TrainingConfig(BaseSettings):
         if self.enable_early_stopping:
             save_strategy = "best"  # save model every N steps
             save_steps = eval_steps  # how many steps until we save the model
-            save_total_limit = 3  # keep ony 3 saved checkpoints to save disk space
+            save_total_limit = 3  # keep only 3 saved checkpoints to save disk space
             load_best_model_at_end = True  # MUST USE for early stopping
             metric_for_best_model = "eval_loss"  # metric we want to early stop on
             greater_is_better = False  # the lower the eval loss, the better

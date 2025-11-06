@@ -16,7 +16,7 @@ from .models import (
 )
 from .registry import model_registry
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 __author__ = "Pasieka Manuel, manuel.pasieka@protonmail.ch"
 
 __all__ = [
