@@ -121,7 +121,7 @@ class TrainingConfig(BaseSettings):
         if self.enable_early_stopping:
             save_strategy = "best"  # save model every N steps
             save_steps = eval_steps  # how many steps until we save the model
-            save_total_limit = 3  # keep ony 3 saved checkpoints to save disk space
+            save_total_limit = 3  # keep only 3 saved checkpoints to save disk space
             load_best_model_at_end = True  # MUST USE for early stopping
             metric_for_best_model = "eval_loss"  # metric we want to early stop on
             greater_is_better = False  # the lower the eval loss, the better
