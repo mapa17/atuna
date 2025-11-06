@@ -133,7 +133,7 @@ class Tuna:
                 )
             conv = example[self.config.dataset_text_field]
             texts = [
-                self.tokenizer.apply_chat_template(  # noqa: TYP001
+                self.tokenizer.apply_chat_template(  # ty: ignore [possibly-missing-attribute]
                     e, tokenize=False, add_generation_prompt=False
                 )
                 for e in conv

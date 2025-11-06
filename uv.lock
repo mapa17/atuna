@@ -202,7 +202,6 @@ wheels = [
 
 [[package]]
 name = "atuna"
-version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "bitsandbytes" },

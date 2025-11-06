@@ -39,7 +39,7 @@ jobs:
       run: uv sync --all-extras --dev
 
     - name: Run type checking
-      run: uv run ty check src/ --ignore-missing-imports
+      run: uv run ty check src/
       continue-on-error: true  # ty is still experimental
 
     - name: Run linting
