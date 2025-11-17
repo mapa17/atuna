@@ -29,6 +29,24 @@ jobs:
         uv lock --upgrade
         uv sync --group dev
 
+    - name: Check if dependencies changed
+      id: check-changes
+      run: |
+        if git diff --exit-code uv.lock; then
+          echo "No dependency changes detected"
+          echo "dependencies_changed=false" >> $GITHUB_OUTPUT
+        else
+          echo "Dependencies have changed"
+          echo "dependencies_changed=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Bump version if dependencies changed
+      if: steps.check-changes.outputs.dependencies_changed == 'true'
+      run: |
+        echo "Dependencies changed, bumping patch version..."
+        uv run hatch version patch
+        echo "New version: $(uv run hatch version)"
+
     - name: Test with updated dependencies
       run: |
         uv run ruff check src/
