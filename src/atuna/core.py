@@ -18,10 +18,10 @@ from datasets import (
 )
 from trl.trainer.sft_trainer import SFTTrainer
 from transformers import (
-    PreTrainedTokenizer,
     AutoModelForCausalLM,
     EarlyStoppingCallback,
 )
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.generation.utils import GenerationMixin
 import optuna
 from loguru import logger
@@ -44,7 +44,7 @@ class Tuna:
         self.config: TunaConfig = config
         self.data: Optional[DatasetDict] = None
         self.model: Union[AutoModelForCausalLM, GenerationMixin, None] = None
-        self.tokenizer: Optional[PreTrainedTokenizer] = None
+        self.tokenizer: Optional[PreTrainedTokenizerBase] = None
         self.trainer: Optional[SFTTrainer] = None
         self.hyper_trainer: Optional[SFTTrainer] = None
         self.training_result: Optional[TrainingResult] = None
@@ -83,7 +83,7 @@ class Tuna:
     @staticmethod
     def _model_init(
         config: TunaConfig,
-    ) -> tuple[Union[AutoModelForCausalLM, GenerationMixin], PreTrainedTokenizer]:
+    ) -> tuple[Union[AutoModelForCausalLM, GenerationMixin], PreTrainedTokenizerBase]:
         """Initialize model and tokenizer."""
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=config.model_cfg.model_name,
@@ -126,6 +126,8 @@ class Tuna:
         if self.tokenizer is None:
             raise ValueError("Tokenizer must be initialized before loading data.")
 
+        tokenizer: PreTrainedTokenizerBase = self.tokenizer
+
         def apply_template(example: dict[str, list[Any]]):
             if self.config.dataset_text_field not in example:
                 raise ValueError(
@@ -133,7 +135,7 @@ class Tuna:
                 )
             conv = example[self.config.dataset_text_field]
             texts = [
-                self.tokenizer.apply_chat_template(  # ty: ignore [possibly-missing-attribute]
+                tokenizer.apply_chat_template(
                     e, tokenize=False, add_generation_prompt=False
                 )
                 for e in conv
@@ -217,7 +219,7 @@ class Tuna:
     @staticmethod
     def _get_trainer(
         model: Union[AutoModelForCausalLM, GenerationMixin],
-        tokenizer: PreTrainedTokenizer,
+        tokenizer: PreTrainedTokenizerBase,
         data: DatasetDict,
         train_config: TrainingConfig,
         tuna_config: TunaConfig,
@@ -266,7 +268,7 @@ class Tuna:
     def _evaluate_prompts(
         prompts: list[str],
         model: Union[AutoModelForCausalLM, GenerationMixin],
-        tokenizer: PreTrainedTokenizer,
+        tokenizer: PreTrainedTokenizerBase,
         config: TunaConfig,
         max_tokens: int = 300,
         n_samples: int = 3,
@@ -417,7 +419,7 @@ class Tuna:
     @staticmethod
     def _train(
         model: Union[AutoModelForCausalLM, GenerationMixin],
-        tokenizer: PreTrainedTokenizer,
+        tokenizer: PreTrainedTokenizerBase,
         data: DatasetDict,
         training_config: TrainingConfig,
         tuna_config: TunaConfig,
