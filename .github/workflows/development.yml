@@ -68,6 +68,21 @@ jobs:
     #   env:
     #     GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
+        # Debug the token
+    - name: Debug GitHub App Token
+      if: steps.check-changes.outputs.dependencies_changed == 'true'
+      run: |
+        echo "App ID: ${{ vars.PR_TOKEN_APP_ID }}"
+        echo "Token generated: ${{ steps.app-token.outputs.token != '' }}"
+        echo "Repository: ${{ github.repository }}"
+
+        # Test basic API access
+        echo "Testing API access..."
+        curl -s -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
+             -H "Accept: application/vnd.github.v3+json" \
+             "https://api.github.com/repos/${{ github.repository }}" | jq '.name, .permissions' || echo "API test failed"
+
+
     - name: Create Pull Request
       if: steps.check-changes.outputs.dependencies_changed == 'true'
       uses: peter-evans/create-pull-request@v7
