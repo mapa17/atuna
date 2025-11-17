@@ -1,5 +1,9 @@
 [project]
 name = "atuna"
+# Version is managed using hatchling with cli commands like
+# > hatch version patch
+# > hatch version minor
+# > hatch version major
 dynamic = ["version"] # Will be set from src/atuna/__init__.py with hatchling
 description = "A Fine-tuning assistant for large language models"
 readme = "README.md"
