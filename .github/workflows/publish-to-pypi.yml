@@ -86,28 +86,28 @@ jobs:
         name: dist
         path: dist/
 
-  publish-test:
-    name: Publish to TestPyPI 🧪
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/atuna
-    permissions:
-      id-token: write
+  # publish-test:
+  #   name: Publish to TestPyPI 🧪
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+  #   environment:
+  #     name: testpypi
+  #     url: https://test.pypi.org/p/atuna
+  #   permissions:
+  #     id-token: write
 
-    steps:
-    - name: Download build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: dist
-        path: dist/
+  #   steps:
+  #   - name: Download build artifacts
+  #     uses: actions/download-artifact@v4
+  #     with:
+  #       name: dist
+  #       path: dist/
 
-    - name: Publish distribution 📦 to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        repository-url: https://test.pypi.org/legacy/
+  #   - name: Publish distribution 📦 to PyPI
+  #     uses: pypa/gh-action-pypi-publish@release/v1
+  #     with:
+  #       repository-url: https://test.pypi.org/legacy/
 
   publish-pypi:
     name: Publish to PyPI 🚀
