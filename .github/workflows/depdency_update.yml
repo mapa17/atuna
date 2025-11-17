@@ -10,11 +10,6 @@ jobs:
     name: Update dependencies
     runs-on: ubuntu-latest
 
-    # Add explicit permissions for the PR creation
-    #permissions:
-    #  contents: write      # To push changes
-    #  pull-requests: write # To create PRs
-
     steps:
     - uses: actions/checkout@v4
 
@@ -60,28 +55,19 @@ jobs:
         app-id: ${{ vars.PR_TOKEN_APP_ID }}
         private-key: ${{ secrets.PR_TOKEN_APP_SECRET }}
 
-    # # Use the generated token to create a PR
-    # - name: Create Pull Request
+    # # Debug the token
+    # - name: Debug GitHub App Token
     #   if: steps.check-changes.outputs.dependencies_changed == 'true'
     #   run: |
-    #     gh pr create --title "Automated Dependency update" --body "Created via GitHub App"
-    #   env:
-    #     GH_TOKEN: ${{ steps.app-token.outputs.token }}
+    #     echo "App ID: ${{ vars.PR_TOKEN_APP_ID }}"
+    #     echo "Token generated: ${{ steps.app-token.outputs.token != '' }}"
+    #     echo "Repository: ${{ github.repository }}"
 
-        # Debug the token
-    - name: Debug GitHub App Token
-      if: steps.check-changes.outputs.dependencies_changed == 'true'
-      run: |
-        echo "App ID: ${{ vars.PR_TOKEN_APP_ID }}"
-        echo "Token generated: ${{ steps.app-token.outputs.token != '' }}"
-        echo "Repository: ${{ github.repository }}"
-
-        # Test basic API access
-        echo "Testing API access..."
-        curl -s -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
-             -H "Accept: application/vnd.github.v3+json" \
-             "https://api.github.com/repos/${{ github.repository }}" | jq '.name, .permissions' || echo "API test failed"
-
+    #     # Test basic API access
+    #     echo "Testing API access..."
+    #     curl -s -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
+    #          -H "Accept: application/vnd.github.v3+json" \
+    #          "https://api.github.com/repos/${{ github.repository }}" | jq '.name, .permissions' || echo "API test failed"
 
     - name: Create Pull Request
       if: steps.check-changes.outputs.dependencies_changed == 'true'
