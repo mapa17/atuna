@@ -1,10 +1,10 @@
 """Atuna: Fine-tuning assistant for large language models."""
 
-from .core import Tuna
+from .core import Atuna
 from .config import (
-    TunaConfig,
+    AtunaConfig,
     TrainingConfig,
-    HyperparpamConfig,
+    HyperConfig,
     ModelConfig,
 )
 from .models import (
@@ -13,6 +13,7 @@ from .models import (
     TrainingEvaluationPoint,
     StopReason,
     MemoryInfo,
+    HyperRun,
 )
 from .registry import model_registry
 
@@ -20,10 +21,10 @@ __version__ = "0.3.3"
 __author__ = "Pasieka Manuel, manuel.pasieka@protonmail.ch"
 
 __all__ = [
-    "Tuna",
-    "TunaConfig",
+    "Atuna",
+    "AtunaConfig",
     "TrainingConfig",
-    "HyperparpamConfig",
+    "HyperConfig",
     "ModelConfig",
     "model_registry",
     "TrainingResult",
@@ -31,4 +32,5 @@ __all__ = [
     "TrainingEvaluationPoint",
     "StopReason",
     "MemoryInfo",
+    "HyperRun",
 ]

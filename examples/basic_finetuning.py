@@ -1,27 +1,27 @@
 """Example: Basic fine-tuning with Atuna."""
 
 from atuna import (
-    TunaConfig,
-    Tuna,
+    AtunaConfig,
+    Atuna,
     model_registry,
     TrainingConfig,
 )
 
 # Configure the model
 model = model_registry["unsloth/Qwen3-4B-Instruct-2507"]
-config = TunaConfig(
+config = AtunaConfig(
     model_cfg=model,
-    dataset="./data/251015_training_set.csv",
     max_seq_length=2048,
     precision=16,  # Use 16-bit precision for faster training
     cache_dir="./hf_cache",
 )
 
 # Create Tuna instance
-tuna = Tuna(config=config)
+tuna = Atuna(config=config)
 
 # Configure training
 training_config = TrainingConfig(
+    dataset="./data/251015_training_set.csv",
     num_train_epochs=3,
     batch_size=1,
     learning_rate=5e-5,
