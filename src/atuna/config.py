@@ -1,6 +1,7 @@
 """Configuration classes for Tuna fine-tuning assistant."""
 
 from typing import Literal, Optional, Union, Any
+import os
 from pydantic import Field
 from pydantic_settings import BaseSettings
 from trl.trainer.sft_config import SFTConfig
@@ -20,14 +21,10 @@ class ModelConfig(BaseSettings):
     top_k: int
 
 
-class TunaConfig(BaseSettings):
+class AtunaConfig(BaseSettings):
     """Main configuration for Tuna fine-tuning."""
 
     model_cfg: ModelConfig
-    dataset: str
-    dataset_sample: float = 1.0
-    dataset_text_field: str = "text"
-    dataset_test_size: float = 0.01
     max_seq_length: int = 2048
     precision: Literal[4, 8, 16] = Field(default=16)
     load_in_4bit: bool = False
@@ -72,6 +69,11 @@ class TunaConfig(BaseSettings):
 class TrainingConfig(BaseSettings):
     """Configuration for training parameters."""
 
+    dataset: str
+    dataset_sample: float = 1.0
+    dataset_text_field: str = "text"
+    dataset_test_size: float = 0.01
+
     learning_rate: float = 2e-5
     batch_size: int = 1
     gradient_accumulation_steps: int = 16
@@ -79,11 +81,10 @@ class TrainingConfig(BaseSettings):
     response_only: bool = False
     seed: Optional[int] = None
     eval_epochs: Optional[float] = None
-    eval_steps: Optional[int] = None
+    eval_steps: Union[int, float] = 0.1
     enable_early_stopping: bool = True
     evaluation_prompts: list[str] = Field(default_factory=list)
     weight_decay: float = 0.01
-    data_sample: float = 1.0
 
     def calculate_eval_steps(self, training_data_size: int) -> None:
         """Set eval_steps based on eval_epochs and training data size."""
@@ -101,33 +102,30 @@ class TrainingConfig(BaseSettings):
             f"Set eval_steps to {self.eval_steps} based on eval_epochs {self.eval_epochs} and training data size {training_data_size}"
         )
 
-    def SFTConfig(self, tuna_config: TunaConfig) -> SFTConfig:
+    def SFTConfig(self, tuna_config: AtunaConfig) -> SFTConfig:
         """Convert to SFTConfig for the trainer."""
         if self.seed:
             seed = self.seed
         else:
             seed = 3407
 
-        if self.eval_steps:
-            eval_strategy = "steps"
-            eval_steps = self.eval_steps
-        else:
+        if self.eval_steps <= 0.0:
             eval_strategy = "no"
             eval_steps = 0
 
         output_dir = tuna_config.workspace + "/checkpoints"
-        logging_dir = tuna_config.workspace + "/logging"
+        os.makedirs(output_dir, exist_ok=True)
+        logging_dir = tuna_config.workspace + "/logs"
+        os.makedirs(logging_dir, exist_ok=True)
 
         if self.enable_early_stopping:
             save_strategy = "best"  # save model every N steps
-            save_steps = eval_steps  # how many steps until we save the model
             save_total_limit = 3  # keep only 3 saved checkpoints to save disk space
             load_best_model_at_end = True  # MUST USE for early stopping
             metric_for_best_model = "eval_loss"  # metric we want to early stop on
             greater_is_better = False  # the lower the eval loss, the better
         else:
             save_strategy = "no"
-            save_steps = 0
             save_total_limit = None
             load_best_model_at_end = False
             metric_for_best_model = None
@@ -151,18 +149,18 @@ class TrainingConfig(BaseSettings):
             eval_steps=eval_steps,
             output_dir=output_dir,
             save_strategy=save_strategy,
-            save_steps=save_steps,
+            save_steps=eval_steps,
             save_total_limit=save_total_limit,
             load_best_model_at_end=load_best_model_at_end,
             metric_for_best_model=metric_for_best_model,
             greater_is_better=greater_is_better,
-            report_to="tensorboard",  # Change from "none" to "tensorboard"
+            report_to="tensorboard",  # Choose "none" or "tensorboard"
             logging_dir=logging_dir,  # TensorBoard log directory
-            logging_steps=1,
+            logging_steps=0.1,  # log every 10% of an epoch
         )
 
 
-class HyperparpamConfig(BaseSettings):
+class HyperConfig(BaseSettings):
     """Configuration for hyperparameter optimization."""
 
     n_trials: int
@@ -209,8 +207,8 @@ class HyperparpamConfig(BaseSettings):
         return default
 
     def build_configs(
-        self, trial: optuna.Trial, training_cfg: TrainingConfig, tuna_cfg: TunaConfig
-    ) -> tuple[TunaConfig, TrainingConfig]:
+        self, trial: optuna.Trial, training_cfg: TrainingConfig, tuna_cfg: AtunaConfig
+    ) -> tuple[AtunaConfig, TrainingConfig]:
         """Build configurations with hyperparameters suggested by Optuna trial."""
         lr = self._minmax(
             trial, "learning_rate", self.learning_rate, self.learning_rate_min_max

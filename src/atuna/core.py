@@ -5,6 +5,7 @@ import time
 import os
 import subprocess  # nosec
 import pathlib
+import gc
 
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template, train_on_responses_only
@@ -18,32 +19,33 @@ from datasets import (
 )
 from trl.trainer.sft_trainer import SFTTrainer
 from transformers import (
-    AutoModelForCausalLM,
     EarlyStoppingCallback,
+    PreTrainedModel,
 )
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.generation.utils import GenerationMixin
 import optuna
 from loguru import logger
 
-from .config import TunaConfig, TrainingConfig, HyperparpamConfig
+from .config import AtunaConfig, TrainingConfig
 from .models import (
     TrainingResult,
     TrainingPoint,
     TrainingEvaluationPoint,
     StopReason,
     MemoryInfo,
+    HyperRun,
+    HyperRunStatus,
 )
 
 
-class Tuna:
+class Atuna:
     """Fine-tuning assistant for large language models."""
 
-    def __init__(self, config: TunaConfig):
+    def __init__(self, config: AtunaConfig):
         """Initialize Tuna with configuration."""
-        self.config: TunaConfig = config
+        self.config: AtunaConfig = config
         self.data: Optional[DatasetDict] = None
-        self.model: Union[AutoModelForCausalLM, GenerationMixin, None] = None
+        self.model: Union[PreTrainedModel, None] = None
         self.tokenizer: Optional[PreTrainedTokenizerBase] = None
         self.trainer: Optional[SFTTrainer] = None
         self.hyper_trainer: Optional[SFTTrainer] = None
@@ -82,8 +84,8 @@ class Tuna:
 
     @staticmethod
     def _model_init(
-        config: TunaConfig,
-    ) -> tuple[Union[AutoModelForCausalLM, GenerationMixin], PreTrainedTokenizerBase]:
+        config: AtunaConfig,
+    ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
         """Initialize model and tokenizer."""
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=config.model_cfg.model_name,
@@ -121,19 +123,21 @@ class Tuna:
 
     def _load_data(
         self,
+        training_config: TrainingConfig,
     ) -> DatasetDict:
         """Load and preprocess training data."""
         if self.tokenizer is None:
-            raise ValueError("Tokenizer must be initialized before loading data.")
-
-        tokenizer: PreTrainedTokenizerBase = self.tokenizer
+            model, tokenizer = self._model_init(self.config)
+            self._clear_gpu_memory(model)
+        else:
+            tokenizer: PreTrainedTokenizerBase = self.tokenizer
 
         def apply_template(example: dict[str, list[Any]]):
-            if self.config.dataset_text_field not in example:
+            if training_config.dataset_text_field not in example:
                 raise ValueError(
-                    f"Dataset does not contain field '{self.config.dataset_text_field}'. Available fields are: {list(example.keys())}"
+                    f"Dataset does not contain field '{training_config.dataset_text_field}'. Available fields are: {list(example.keys())}"
                 )
-            conv = example[self.config.dataset_text_field]
+            conv = example[training_config.dataset_text_field]
             texts = [
                 tokenizer.apply_chat_template(
                     e, tokenize=False, add_generation_prompt=False
@@ -145,16 +149,18 @@ class Tuna:
             }
 
         # Load dataset from file or dataset hub
-        if os.path.exists(self.config.dataset):
-            _, ext = os.path.splitext(self.config.dataset)
+        if os.path.exists(training_config.dataset):
+            _, ext = os.path.splitext(training_config.dataset)
             ext = ext[1:]
             logger.debug(
-                f"Loading dataset from file: {self.config.dataset} with extension: {ext}"
+                f"Loading dataset from file: {training_config.dataset} with extension: {ext}"
             )
-            data = load_dataset(ext, data_files=self.config.dataset, revision="main")  # nosec B615
+            data = load_dataset(
+                ext, data_files=training_config.dataset, revision="main"
+            )  # nosec B615
         else:
-            logger.debug(f"Loading dataset from hub: {self.config.dataset}")
-            data = load_dataset(self.config.dataset, revision="main")  # nosec B615
+            logger.debug(f"Loading dataset from hub: {training_config.dataset}")
+            data = load_dataset(training_config.dataset, revision="main")  # nosec B615
 
         # Apply tokenizer specific chat template and split into test and train
         match data:
@@ -173,7 +179,7 @@ class Tuna:
                     )
                     data_templated = data[key].map(apply_template, batched=True)
                     split_dataset = data_templated.train_test_split(
-                        test_size=self.config.dataset_test_size,
+                        test_size=training_config.dataset_test_size,
                         shuffle=True,
                         seed=self.config.seed,
                     )
@@ -182,7 +188,7 @@ class Tuna:
                 logger.info("Loading dataset and creating train/test split.")
                 data_templated = data.map(apply_template, batched=True)
                 split_dataset = data_templated.train_test_split(
-                    test_size=self.config.dataset_test_size,
+                    test_size=training_config.dataset_test_size,
                     shuffle=True,
                     seed=self.config.seed,
                 )
@@ -192,9 +198,11 @@ class Tuna:
                 raise NotImplementedError("IterableDatasetDict not supported yet.")
 
         # Sample a subset of training and test if required
-        if self.config.dataset_sample < 1.0:
+        if training_config.dataset_sample < 1.0:
             for key in ["train", "test"]:
-                n_samples = int(len(split_dataset[key]) * self.config.dataset_sample)
+                n_samples = int(
+                    len(split_dataset[key]) * training_config.dataset_sample
+                )
                 split_dataset[key] = (
                     split_dataset[key]
                     .shuffle(seed=self.config.seed)
@@ -218,11 +226,11 @@ class Tuna:
 
     @staticmethod
     def _get_trainer(
-        model: Union[AutoModelForCausalLM, GenerationMixin],
+        model: PreTrainedModel,
         tokenizer: PreTrainedTokenizerBase,
         data: DatasetDict,
         train_config: TrainingConfig,
-        tuna_config: TunaConfig,
+        tuna_config: AtunaConfig,
     ) -> SFTTrainer:
         """Create and configure SFT trainer."""
         n_samples = len(data["train"])
@@ -236,7 +244,7 @@ class Tuna:
         )
 
         if train_config.enable_early_stopping:
-            Tuna._add_early_stopping(trainer)
+            Atuna._add_early_stopping(trainer)
 
         if train_config.response_only:
             trainer = train_on_responses_only(
@@ -255,7 +263,7 @@ class Tuna:
                 "Model and tokenizer must be initialized before evaluation."
             )
 
-        return Tuna._evaluate_prompts(
+        return Atuna._evaluate_prompts(
             prompts,
             self.model,
             self.tokenizer,
@@ -267,9 +275,9 @@ class Tuna:
     @staticmethod
     def _evaluate_prompts(
         prompts: list[str],
-        model: Union[AutoModelForCausalLM, GenerationMixin],
+        model: PreTrainedModel,
         tokenizer: PreTrainedTokenizerBase,
-        config: TunaConfig,
+        config: AtunaConfig,
         max_tokens: int = 300,
         n_samples: int = 3,
     ) -> list[str]:
@@ -336,7 +344,7 @@ class Tuna:
             self.tokenizer = new_tokenizer if self.tokenizer is None else self.tokenizer
 
         if self.data is None:
-            self.data = self._load_data()
+            self.data = self._load_data(config)
 
         result = self._train(
             model=self.model,
@@ -351,8 +359,9 @@ class Tuna:
 
     def _hyper_train(
         self,
-        training_config: TrainingConfig,
-        hyper_config: HyperparpamConfig,
+        run: HyperRun,
+        base_training_config: TrainingConfig,
+        data: DatasetDict,
         trial: optuna.trial.Trial,
     ) -> float:
         """Train model with hyperparameters suggested by Optuna trial."""
@@ -366,21 +375,44 @@ class Tuna:
         )
         # Let Optuna suggest the hyperparameters
         # Create a TrainingConfig with the suggested hyperparameters
-        tuna_cfg, training_cfg = hyper_config.build_configs(
-            trial=trial, tuna_cfg=self.config, training_cfg=training_config
+        tuna_cfg, training_cfg = run.config.build_configs(
+            trial=trial, tuna_cfg=self.config, training_cfg=base_training_config
         )
-        model, tokenizer = self._model_init(tuna_cfg)
-        if self.data is None:
-            self.data = self._load_data()
+        model = None
+        try:
+            result = TrainingResult.failed_training()
 
-        result = self._train(
-            model=model,
-            tokenizer=tokenizer,
-            data=self.data,
-            training_config=training_cfg,
-            tuna_config=tuna_cfg,
-        )
-        self.training_result = result
+            model, tokenizer = self._model_init(tuna_cfg)
+
+            logger.debug(f"Training with config: {tuna_cfg=}, {training_cfg=}")
+            result = self._train(
+                model=model,
+                tokenizer=tokenizer,
+                data=data,
+                training_config=training_cfg,
+                tuna_config=tuna_cfg,
+            )
+
+        except AssertionError as ae:
+            logger.error(
+                f"Trial {trial.number} failed with assertion error. {ae}. This indicates a invalid training or tuna configuration! {tuna_cfg=}, {training_cfg=}"
+            )
+        except torch.OutOfMemoryError as oome:
+            logger.error(
+                f"Trial {trial.number} ran out of memory: {oome}. Try to reduce model size by reducing max_seq_length, batch_size or load the model in lower precision!"
+            )
+        except StopIteration as si:
+            logger.error(
+                f"Trial {trial.number} failed due to empty dataset or dataloader: {si}. Check your dataset and preprocessing steps!"
+            )
+        except Exception as e:
+            # TODO: more specific exception handling
+            logger.error(f"Trial {trial.number} failed with exception: {e}")
+        finally:
+            self._clear_gpu_memory(model)
+
+        # Store trial results in HyperRun
+        run.trials.append((training_cfg, tuna_cfg, result))
 
         # Add full training result to trial attributes
         result.add_to_trial(trial)
@@ -418,16 +450,16 @@ class Tuna:
 
     @staticmethod
     def _train(
-        model: Union[AutoModelForCausalLM, GenerationMixin],
+        model: PreTrainedModel,
         tokenizer: PreTrainedTokenizerBase,
         data: DatasetDict,
         training_config: TrainingConfig,
-        tuna_config: TunaConfig,
+        tuna_config: AtunaConfig,
     ) -> TrainingResult:
         """Core training logic."""
         start_time = time.time()
 
-        trainer = Tuna._get_trainer(
+        trainer = Atuna._get_trainer(
             model=model,
             tokenizer=tokenizer,
             data=data,
@@ -439,7 +471,7 @@ class Tuna:
         evaluation_prompts_post_training = []
 
         if training_config.evaluation_prompts:
-            evaluation_prompts_pre_training = Tuna._evaluate_prompts(
+            evaluation_prompts_pre_training = Atuna._evaluate_prompts(
                 prompts=training_config.evaluation_prompts,
                 model=model,
                 tokenizer=tokenizer,
@@ -449,20 +481,21 @@ class Tuna:
         trainer.train()
 
         if training_config.evaluation_prompts:
-            evaluation_prompts_post_training = Tuna._evaluate_prompts(
+            evaluation_prompts_post_training = Atuna._evaluate_prompts(
                 prompts=training_config.evaluation_prompts,
                 model=model,
                 tokenizer=tokenizer,
                 config=tuna_config,
             )
 
-        train_points, eval_points = Tuna._log_history_to_points(trainer)
+        train_points, eval_points = Atuna._log_history_to_points(trainer)
 
-        stop_reason = Tuna._determine_stop_reason(trainer)
+        stop_reason = Atuna._determine_stop_reason(trainer)
 
         end_time = time.time()
 
         return TrainingResult(
+            success=True,
             epochs=float(trainer.state.epoch) if trainer.state.epoch else 0.0,
             duration=end_time - start_time,
             stop_reason=stop_reason,
@@ -476,6 +509,30 @@ class Tuna:
     def compute_objective(metric: dict[str, float]) -> float:
         """Compute objective value for optimization."""
         return metric["eval_loss"]
+
+    @staticmethod
+    def _clear_gpu_memory(
+        model: Optional[PreTrainedModel] = None,
+    ) -> None:
+        """Helper function to clear/release GPU memory"""
+        logger.info("Resetting PyTorch to clear memory.")
+
+        # If a model is loaded, first move it to CPU and delete it. Only this clears GPU memory.
+        if model:
+            model.cpu()
+            del model
+
+        # Clear GPU cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+        # Force Python garbage collection
+        gc.collect()
+
+        # reset CUDA device
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.reset_accumulated_memory_stats()
 
     def _setup_hyperparam_tune(self, study_name: str) -> optuna.study.Study:
         """Set up Optuna study for hyperparameter tuning."""
@@ -513,27 +570,35 @@ class Tuna:
         return study
 
     def hyperparam_tune(
-        self,
-        study_name: str,
-        train_config: TrainingConfig,
-        hyper_config: HyperparpamConfig,
+        self, train_config: TrainingConfig, run: HyperRun
     ) -> optuna.study.Study:
         """Run hyperparameter optimization."""
         logger.info(
-            f"Starting hyperparameter tuning for study {study_name} with {hyper_config.n_trials} trials."
+            f"Starting hyperparameter tuning for study {run.name} with {run.config.n_trials} trials."
         )
-        study = self._setup_hyperparam_tune(study_name=study_name)
+        data = self._load_data(train_config)
 
+        study = self._setup_hyperparam_tune(study_name=run.name)
         study.optimize(
             func=lambda trial: self._hyper_train(
-                training_config=train_config, hyper_config=hyper_config, trial=trial
+                run=run,
+                base_training_config=train_config,
+                trial=trial,
+                data=data,
             ),
-            n_trials=hyper_config.n_trials,
+            n_trials=run.config.n_trials,
         )
+        run.status = HyperRunStatus.COMPLETED
+        run.best_trial = run.calculate_best_trial()
 
-        best_trial_path = (
-            f"{self.original_workspace}/studies/{study_name}/{study.best_trial.number}"
-        )
+        run_path = f"{self.original_workspace}/studies/{run.name}"
+
+        run_filepath = f"{run_path}/HyperRun.json"
+        logger.info(f"Storing HyperRun configuration and results in {run_filepath}")
+        with open(run_filepath, "w", encoding="utf-8") as f:
+            f.write(run.model_dump_json(indent=4))
+
+        best_trial_path = f"{run_path}/{study.best_trial.number}"
         logger.info(
             f"Best trial: {study.best_trial.number} with value: {study.best_trial.value}. Model stored in {best_trial_path}"
         )
@@ -569,6 +634,8 @@ class Tuna:
     ):
         """Start Optuna Dashboard with authentication."""
         storage_url = f"sqlite:///{self.original_workspace}/optuna_studies.db"
+        # Create storage to ensure DB is accessible or the dashboard will not start
+        optuna.storages.RDBStorage(storage_url)
 
         try:
             cmd = [
@@ -580,7 +647,9 @@ class Tuna:
                 self.config.dashboard_host,
             ]
 
-            self._optuna_process = subprocess.Popen(cmd)  # nosec B603
+            self._optuna_process = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )  # nosec B603
 
             url = f"http://{self.config.dashboard_host}:{self.config.dashboard_optuna_port}"
             logger.info(f"Optuna Dashboard started at: {url}")
@@ -594,8 +663,10 @@ class Tuna:
 
     def start_tensorboard(self):
         """Start TensorBoard using subprocess for better process control."""
-        logdir = f"{self.original_workspace}/logs"
+        logdir = f"{self.original_workspace}"
         os.makedirs(logdir, exist_ok=True)
+
+        logger.info(f"Starting TensorBoard with logdir: {logdir}")
 
         try:
             cmd = [
@@ -610,7 +681,9 @@ class Tuna:
                 "30",
             ]
 
-            self._tensorboard_process = subprocess.Popen(cmd)  # nosec B603
+            self._tensorboard_process = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )  # nosec B603
 
             url = f"http://{self.config.dashboard_host}:{self.config.dashboard_tb_port}"
             logger.info(f"TensorBoard started at: {url}")
